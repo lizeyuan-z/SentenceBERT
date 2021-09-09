@@ -1,0 +1,130 @@
+import torch
+from torch import nn
+from torch.optim import Adam, SGD
+import numpy as np
+from Model import SimSaim
+from Loss import My_Loss
+
+
+torch.manual_seed(41)
+"""
+torch.cuda.current_device()
+torch.cuda._initialized = True
+"""
+np.random.seed(41)
+
+
+def train(config, is_cross, device, max_length, batch_size, learning_rate, train_path, trained_model, tao, lamda, paramater):
+
+    # 数据预处理
+    train_set_sentence1 = []
+    train_set_sentence2 = []
+    train_label = []
+    with open(train_path[0], 'r', encoding='utf-8') as f:
+        for line in f:
+            tmp = line.strip().split('\t')
+            try:
+                train_set_sentence1.append(tmp[0].strip())
+                train_set_sentence2.append(tmp[1].strip())
+                train_label.append(int(tmp[2].strip()))
+            except:
+                pass
+    label = ['entailment', 'contradiction', 'neutral']
+    with open(train_path[1], 'r', encoding='utf-8') as f:
+        for line in f:
+            tmp = line.strip().split('\t')
+            try:
+                train_set_sentence1.append(tmp[0].strip())
+                train_set_sentence2.append(tmp[1].strip())
+                train_label.append(int(tmp[2].strip()))
+            except:
+                pass
+    index = [i for i in range(len(train_label))]
+    np.random.shuffle(index)
+    train_set_sentence1_shuffled = []
+    train_set_sentence2_shuffled = []
+    train_label_shuffled = []
+    for i in index:
+        train_set_sentence1_shuffled.append(train_set_sentence1[i])
+        train_set_sentence2_shuffled.append(train_set_sentence2[i])
+        train_label_shuffled.append(train_label[i])
+    print('total:', len(train_label))
+
+    # 模型初始化
+    model1 = SimSaim(config, device, max_length)
+    model2 = SimSaim(config, device, max_length)
+    model1.to(device)
+    model2.to(device)
+
+    # 导入模型参数
+    param1 = torch.load(paramater[0], map_location=device)
+    param2 = torch.load(paramater[1], map_location=device)
+    model1.load_state_dict({k: v for k, v in param1.items() if 'bert' in k})
+    model2.load_state_dict({k: v for k, v in param2.items() if 'bert' in k})
+
+    loss_fn = My_Loss(tao, lamda, device, batch_size)
+
+    loss_fn.to(device)
+    # optimizer = Adam(model.parameters(), lr=learning_rate, eps=1e-8)
+    optimizer1 = Adam(params=[{'params': model1.bert.parameters(), 'lr': learning_rate}], lr=learning_rate)
+    optimizer2 = Adam(params=[{'params': model2.bert.parameters(), 'lr': learning_rate}], lr=learning_rate)
+    warm_up_iter = len(train_label) // 10
+    WarmUp = lambda cur_iter: cur_iter / warm_up_iter if cur_iter < warm_up_iter else 1
+    NoWarmUp = lambda cur_iter: 1
+    WarmUpLR1 = torch.optim.lr_scheduler.LambdaLR(optimizer1, lr_lambda=[WarmUp])
+    WarmUpLR2 = torch.optim.lr_scheduler.LambdaLR(optimizer2, lr_lambda=[WarmUp])
+    optimizer1.zero_grad()
+    optimizer2.zero_grad()
+
+    # 模型训练
+    model1.train()
+    model2.train()
+    for i in range(0, len(train_label_shuffled), batch_size):
+        if i + batch_size <= len(train_label_shuffled):
+            vector1 = model1(train_set_sentence1_shuffled[i: i + batch_size])
+            vector2 = model2(train_set_sentence1_shuffled[i: i + batch_size])
+            vector3 = model1(train_set_sentence2_shuffled[i: i + batch_size])
+            vector4 = model2(train_set_sentence2_shuffled[i: i + batch_size])
+            loss = ((loss_fn(vector1, vector2) + loss_fn(vector3, vector4)) / 2).to(device)
+        else:
+            vector1 = model1(train_set_sentence1_shuffled[i:])
+            vector2 = model2(train_set_sentence1_shuffled[i:])
+            vector3 = model1(train_set_sentence2_shuffled[i:])
+            vector4 = model2(train_set_sentence2_shuffled[i:])
+            loss = ((loss_fn(vector1, vector2) + loss_fn(vector3, vector4)) / 2).to(device)
+        loss.backward(retain_graph=True)
+        optimizer1.step()
+        WarmUpLR1.step()
+        optimizer1.zero_grad()
+        print('>>>batch:{0}     loss:{1}'.format(i // batch_size, float(loss)))
+
+        if i + batch_size <= len(train_label_shuffled):
+            vector1 = model1(train_set_sentence1_shuffled[i: i + batch_size])
+            vector3 = model1(train_set_sentence2_shuffled[i: i + batch_size])
+            loss = ((loss_fn(vector1, vector2) + loss_fn(vector3, vector4)) / 2).to(device)
+        else:
+            vector1 = model1(train_set_sentence1_shuffled[i:])
+            vector3 = model1(train_set_sentence2_shuffled[i:])
+            loss = ((loss_fn(vector1, vector2) + loss_fn(vector3, vector4)) / 2).to(device)
+        loss.backward()
+        optimizer2.step()
+        WarmUpLR2.step()
+        optimizer2.zero_grad()
+        print('>>>batch:{0}     loss:{1}'.format(i // batch_size, float(loss)))
+    torch.save(model1.state_dict(), 'trained_model' + '/{0}_model1'.format(trained_model))
+    torch.save(model2.state_dict(), 'trained_model' + '/{0}_model2'.format(trained_model))
+
+
+if __name__ == "__main__":
+    config = 'pretrain_model'
+    is_cross = False
+    device = torch.device('cpu')
+    max_length = 30
+    batch_size = 16
+    learning_rate = 5e-4
+    tao = 0.2
+    lamda = 0.025
+    train_path = ['data/SNLI/train.txt', 'data/MultiNLI/train.txt']
+    paramater = ['trained_model/SentenceBERT_NLI_model', 'trained_model/SentenceBERT_QQP_model']
+    trained_model = 'SimSiam'
+    train(config, is_cross, device, max_length, batch_size, learning_rate, train_path, trained_model, tao, lamda, paramater)
