@@ -1,6 +1,6 @@
-# SBERT及SimCSE等表示学习领域重要模型的复现
+# SentenceBERT
 ***
-此项目代码为对于模型 ```SentenceBERT ```的复现
+此项目代码为对于模型 ```SentenceBERT ```及```SimCSE```等表示学习领域重要模型的复现
 ***
 | Model Setup | Dev | Accuracy |
 | ----------- | ----| ---------|
