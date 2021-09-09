@@ -1,5 +1,5 @@
 # SentenceBERT
-SentenceBERT模型复现
+SBERT及SimCSE等表示学习领域重要模型的复现
 ***
 此项目代码为对于模型 ```SentenceBERT ```的复现
 ***
